@@ -6,13 +6,17 @@ GDRIVE_SYNC_INTERVAL="${GDRIVE_SYNC_INTERVAL:-900}"
 GDRIVE_LOCAL_PATH="${GDRIVE_LOCAL_PATH:-/root/.hermes/drive/obsidian}"
 
 start_gdrive_sync() {
-  if [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ] || [ -z "${GDRIVE_ROOT_FOLDER_ID:-}" ]; then
+  if { [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ] && [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; } || [ -z "${GDRIVE_ROOT_FOLDER_ID:-}" ]; then
     echo "Google Drive sync disabled: required variables are not configured."
     return
   fi
 
   local credentials_path="/tmp/gdrive-service-account.json"
-  printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$credentials_path"
+  if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ]; then
+    printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON_B64" | base64 -d > "$credentials_path"
+  else
+    printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$credentials_path"
+  fi
   chmod 600 "$credentials_path"
   mkdir -p "$GDRIVE_LOCAL_PATH"
 
