@@ -22,15 +22,19 @@ start_gdrive_sync() {
 
   (
     local remote=":drive,service_account_file=${credentials_path},root_folder_id=${GDRIVE_ROOT_FOLDER_ID},scope=drive.readonly,shared_with_me=true:"
+    local source="${remote}Obsidian"
     while true; do
       echo "Syncing Google Drive Obsidian folder (read-only remote)..."
-      echo "Remote top-level entries:"
-      rclone lsf "$remote" --max-depth 1 || true
-      if rclone copy "$remote" \
+      echo "Obsidian source top-level entries:"
+      rclone lsf "$source" --max-depth 1 --dirs-only || true
+      if rclone copy "$source" \
           "$GDRIVE_LOCAL_PATH" \
           --create-empty-src-dirs \
           --checkers 8 \
-          --transfers 4; then
+          --transfers 4 \
+          --stats 30s \
+          --stats-one-line \
+          --log-level INFO; then
         echo "Google Drive sync complete."
       else
         echo "Google Drive sync failed; retrying after ${GDRIVE_SYNC_INTERVAL}s."
