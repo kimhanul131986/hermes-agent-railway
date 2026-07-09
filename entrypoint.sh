@@ -1,1 +1,71 @@
-#!/usr/bin/env bash set -e  AUTO_UPDATE="${AUTO_UPDATE:-true}" GDRIVE_SYNC_INTERVAL="${GDRIVE_SYNC_INTERVAL:-900}" GDRIVE_LOCAL_PATH="${GDRIVE_LOCAL_PATH:-/root/.hermes/drive/obsidian}"  start_gdrive_sync() {   if { [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ] && [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; } || [ -z "${GDRIVE_ROOT_FOLDER_ID:-}" ]; then     echo "Google Drive sync disabled: required variables are not configured."     return   fi    local credentials_path="/tmp/gdrive-service-account.json"   if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ]; then     printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON_B64" | base64 -d > "$credentials_path"   else     printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$credentials_path"   fi   chmod 600 "$credentials_path"   mkdir -p "$GDRIVE_LOCAL_PATH"    (     local remote=":drive,service_account_file=${credentials_path},root_folder_id=${GDRIVE_ROOT_FOLDER_ID},scope=drive.readonly,shared_with_me=true:"     local source="${remote}Obsidian"     while true; do       echo "Syncing Google Drive Obsidian folder (read-only remote)..."       echo "Obsidian source top-level entries:"       rclone lsf "$source" --max-depth 1 --dirs-only || true       if rclone copy "$source" \           "$GDRIVE_LOCAL_PATH" \           --create-empty-src-dirs \           --checkers 8 \           --transfers 4 \           --stats 30s \           --stats-one-line \           --log-level INFO; then         echo "Google Drive sync complete."       else         echo "Google Drive sync failed; retrying after ${GDRIVE_SYNC_INTERVAL}s."       fi       sleep "$GDRIVE_SYNC_INTERVAL"     done   ) & }  if [ "$AUTO_UPDATE" = "true" ]; then   echo "Checking for Hermes updates..."   cd /opt/hermes-agent   if git pull --recurse-submodules 2>&1 | grep -v 'Already up to date'; then     echo "Updating dependencies..."     VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install -e ".[all]" --quiet     echo "Update complete."   else     echo "Already up to date."   fi fi  start_gdrive_sync  hermes dashboard --host 127.0.0.1 --port 9119 --no-open &  exec python /auth_proxy.py
+#!/usr/bin/env bash
+set -e
+
+AUTO_UPDATE="${AUTO_UPDATE:-true}"
+GDRIVE_SYNC_INTERVAL="${GDRIVE_SYNC_INTERVAL:-900}"
+GDRIVE_LOCAL_PATH="${GDRIVE_LOCAL_PATH:-/root/.hermes/drive/obsidian}"
+
+start_gdrive_sync() {
+  if { [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ] && [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; } || [ -z "${GDRIVE_ROOT_FOLDER_ID:-}" ]; then
+    echo "Google Drive sync disabled: required variables are not configured."
+    return 0
+  fi
+
+  (
+    set +e
+
+    local credentials_path="/tmp/gdrive-service-account.json"
+    if [ -n "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ]; then
+      printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON_B64" | base64 -d > "$credentials_path"
+    else
+      printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$credentials_path"
+    fi
+
+    chmod 600 "$credentials_path"
+    mkdir -p "$GDRIVE_LOCAL_PATH"
+
+    local remote=":drive,service_account_file=${credentials_path},root_folder_id=${GDRIVE_ROOT_FOLDER_ID},scope=drive.readonly,shared_with_me=true:"
+    local source="${remote}Obsidian"
+
+    while true; do
+      echo "Syncing Google Drive Obsidian folder (markdown only, read-only remote)..."
+      echo "Obsidian source top-level entries:"
+      rclone lsf "$source" --max-depth 1 --dirs-only || true
+
+      if timeout 600 rclone copy "$source" \
+          "$GDRIVE_LOCAL_PATH" \
+          --include "*.md" \
+          --include "*/" \
+          --exclude "*" \
+          --checkers 4 \
+          --transfers 2 \
+          --stats 60s \
+          --stats-one-line \
+          --log-level NOTICE; then
+        echo "Google Drive sync complete."
+      else
+        echo "Google Drive sync failed; retrying after ${GDRIVE_SYNC_INTERVAL}s."
+      fi
+
+      sleep "$GDRIVE_SYNC_INTERVAL"
+    done
+  ) &
+}
+
+if [ "$AUTO_UPDATE" = "true" ]; then
+  echo "Checking for Hermes updates..."
+  cd /opt/hermes-agent
+  if git pull --recurse-submodules 2>&1 | grep -v 'Already up to date'; then
+    echo "Updating dependencies..."
+    VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install -e ".[all]" --quiet
+    echo "Update complete."
+  else
+    echo "Already up to date."
+  fi
+fi
+
+start_gdrive_sync
+
+hermes dashboard --host 127.0.0.1 --port 9119 --no-open &
+
+exec python /auth_proxy.py
