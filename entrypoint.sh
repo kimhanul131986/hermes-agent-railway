@@ -4,6 +4,7 @@ set -e
 AUTO_UPDATE="${AUTO_UPDATE:-true}"
 GDRIVE_SYNC_INTERVAL="${GDRIVE_SYNC_INTERVAL:-900}"
 GDRIVE_LOCAL_PATH="${GDRIVE_LOCAL_PATH:-/root/.hermes/drive/obsidian}"
+MARKETING_SCHEDULER_ENABLED="${MARKETING_SCHEDULER_ENABLED:-false}"
 
 start_gdrive_sync() {
   if { [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON_B64:-}" ] && [ -z "${GDRIVE_SERVICE_ACCOUNT_JSON:-}" ]; } || [ -z "${GDRIVE_ROOT_FOLDER_ID:-}" ]; then
@@ -65,6 +66,13 @@ if [ "$AUTO_UPDATE" = "true" ]; then
 fi
 
 start_gdrive_sync
+
+if [ "$MARKETING_SCHEDULER_ENABLED" = "true" ]; then
+  echo "[Scheduler] enabling marketing pipeline scheduler..."
+  python /marketing_pipeline.py --scheduler &
+else
+  echo "[Scheduler] marketing pipeline scheduler disabled."
+fi
 
 hermes dashboard --host 127.0.0.1 --port 9119 --no-open &
 
