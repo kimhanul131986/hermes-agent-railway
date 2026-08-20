@@ -298,6 +298,10 @@ def discord_content_targets():
             "webhook": os.environ.get("DISCORD_WEBHOOK_촬영지시서", "").strip(),
             "channel": os.environ.get("DISCORD_CHANNEL_SHOOTING_GUIDE", "").strip(),
         },
+        "Place 새소식": {
+            "webhook": os.environ.get("DISCORD_WEBHOOK_플레이스", "").strip(),
+            "channel": os.environ.get("DISCORD_CHANNEL_PLACE_DRAFT", "").strip(),
+        },
         "승인대기": {
             "webhook": (
                 os.environ.get("DISCORD_WEBHOOK_승인대기", "").strip()
@@ -429,6 +433,9 @@ def build_content_prompt(research):
 
 ## 촬영 지시서
 카드뉴스와 다른 채널에 공통으로 활용할 수 있는 실제 촬영 컷 6~10개. 각 컷마다 촬영 목적, 구도, 필요한 소품, 피해야 할 요소를 짧게 적는다.
+
+## Place 새소식
+네이버 플레이스 새소식에 바로 붙여 넣을 수 있는 제목 1개와 본문. 확인되지 않은 가격·행사·할인을 넣지 않고, 매장 방문 맥락과 자연스러운 행동 유도를 포함한다.
 
 ## 검수 체크리스트
 사실 확인, 표현 수정, 필요한 사진 또는 운영 확인 항목을 3~5개.

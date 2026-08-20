@@ -50,6 +50,7 @@ This template goes beyond a basic Hermes deploy:
 | `DISCORD_WEBHOOK_블로그` | Preferred webhook for blog drafts. |
 | `DISCORD_WEBHOOK_인스타` | Preferred webhook for Instagram card-news copy. |
 | `DISCORD_WEBHOOK_촬영지시서` | Preferred webhook for shooting instructions. |
+| `DISCORD_WEBHOOK_플레이스` | Preferred webhook for Naver Place news drafts. |
 | `DISCORD_WEBHOOK_승인대기` | Preferred webhook for the compact approval summary. |
 | `MARKETING_SCHEDULER_ENABLED` | Set `true` to run the daily marketing pipeline. Keep `false` until manual tests pass. |
 | `MARKETING_RUN_TIME` | Daily run time in `HH:MM`, interpreted using `TZ`. |
