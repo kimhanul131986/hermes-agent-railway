@@ -35,9 +35,9 @@ start_gdrive_sync() {
 
       if timeout 600 rclone copy "$source" \
           "$GDRIVE_LOCAL_PATH" \
-          --include "*.md" \
-          --include "*/" \
-          --exclude "*" \
+          --filter "+ **/" \
+          --filter "+ **.md" \
+          --filter "- **" \
           --checkers 4 \
           --transfers 2 \
           --stats 60s \
