@@ -122,7 +122,16 @@ def fetch_korean_trends():
 
 
 def research_snapshot():
-    return {"obsidian": read_obsidian_sources(), "trends": fetch_korean_trends()}
+    obsidian = read_obsidian_sources()
+    require_obsidian = os.environ.get("MARKETING_REQUIRE_OBSIDIAN", "true").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if require_obsidian and not obsidian:
+        raise RuntimeError(
+            "Obsidian source check failed: no markdown files were loaded from "
+            f"{os.environ.get('GDRIVE_LOCAL_PATH', DEFAULT_OBSIDIAN_PATH)}"
+        )
+    return {"obsidian": obsidian, "trends": fetch_korean_trends()}
 
 
 def research_summary(research):
@@ -393,6 +402,7 @@ def main():
     parser.add_argument("--test-llm", action="store_true", help="Send a tiny OpenRouter request")
     parser.add_argument("--test-discord", action="store_true", help="Send a Discord test message")
     parser.add_argument("--test-research", action="store_true", help="Inspect Obsidian and Korean trend inputs")
+    parser.add_argument("--test-gdrive", action="store_true", help="Verify locally synced Obsidian markdown files")
     parser.add_argument("--scheduler", action="store_true", help="Run the daily scheduler loop")
     args = parser.parse_args()
     try:
@@ -400,7 +410,7 @@ def main():
             run_llm_test()
         elif args.test_discord:
             run_discord_test()
-        elif args.test_research:
+        elif args.test_research or args.test_gdrive:
             run_research_test()
         elif args.scheduler:
             scheduler_loop()

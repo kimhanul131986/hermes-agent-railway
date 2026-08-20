@@ -45,6 +45,8 @@ This template goes beyond a basic Hermes deploy:
 | `MARKETING_RUN_TIME` | Daily run time in `HH:MM`, interpreted using `TZ`. |
 | `MARKETING_SOURCE_TOPIC` | Fallback source topic for manual and scheduled tests. |
 | `STORE_NAME` | Store name included in the generation prompt. |
+| `GDRIVE_SOURCE_SUBPATH` | Folder below `GDRIVE_ROOT_FOLDER_ID` to sync (default: `Obsidian`; use an empty value when the root ID is already the Obsidian folder). |
+| `MARKETING_REQUIRE_OBSIDIAN` | Fail safely instead of generating an ungrounded draft when no Markdown sources are available (default: `true`). |
 
 All other Hermes configuration is still available through the dashboard after deploy.
 
@@ -55,6 +57,7 @@ Run these inside the Railway shell or container after setting the required envir
 ```bash
 python /marketing_pipeline.py --test-llm
 python /marketing_pipeline.py --test-discord
+python /marketing_pipeline.py --test-gdrive
 python /marketing_pipeline.py --once
 ```
 
