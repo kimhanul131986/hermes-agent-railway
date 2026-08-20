@@ -273,7 +273,7 @@ def send_discord_message(content):
 
 def extract_markdown_section(content, heading):
     pattern = re.compile(
-        rf"^##\s+{re.escape(heading)}\s*$\n?(.*?)(?=^##\s+|\Z)",
+        rf"^#{{2,4}}\s*[^\n]*{re.escape(heading)}[^\n]*$\n?(.*?)(?=^#{{2,4}}\s+|\Z)",
         re.MULTILINE | re.DOTALL | re.IGNORECASE,
     )
     match = pattern.search(content)
@@ -337,6 +337,8 @@ def send_marketing_channels(content, research, now):
     for heading, target in draft_targets.items():
         section = extract_markdown_section(content, heading)
         if not section:
+            headings = re.findall(r"^#{2,4}\s*.+$", content, re.MULTILINE)
+            log("LLM", f"generated headings: {headings[:20]}")
             raise RuntimeError(f"Generated content is missing required section: {heading}")
         message = (
             f"## {heading} 초안\n"
