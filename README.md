@@ -61,6 +61,12 @@ python /marketing_pipeline.py --test-gdrive
 python /marketing_pipeline.py --once
 ```
 
+For a manual full-path test from the repository, run:
+
+```bash
+python test_marketing_pipeline.py
+```
+
 Expected logs are stage-specific:
 
 ```text

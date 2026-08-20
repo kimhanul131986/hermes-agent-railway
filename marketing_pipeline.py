@@ -73,7 +73,11 @@ def read_obsidian_sources():
     max_files = max(1, int(os.environ.get("OBSIDIAN_MAX_FILES", "12")))
     max_chars = max(400, int(os.environ.get("OBSIDIAN_MAX_CHARS", "12000")))
     files = sorted(
-        (path for path in root.rglob("*.md") if not any(part.startswith(".") for part in path.parts)),
+        (
+            path
+            for path in root.rglob("*.md")
+            if not any(part.startswith(".") for part in path.relative_to(root).parts)
+        ),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
