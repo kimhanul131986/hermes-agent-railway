@@ -216,8 +216,8 @@ def discord_webhook_url():
     )
 
 
-def send_discord_webhook(content):
-    url = discord_webhook_url()
+def send_discord_webhook(content, url=None):
+    url = (url or discord_webhook_url()).strip()
     if not url:
         return False
     for index, chunk in enumerate(split_discord_message(content), start=1):
@@ -239,9 +239,9 @@ def send_discord_webhook(content):
     return True
 
 
-def send_discord_bot_message(content):
+def send_discord_bot_message(content, channel_id=None):
     token = require_env("DISCORD_BOT_TOKEN")
-    channel_id = require_env("DISCORD_CHANNEL_ID")
+    channel_id = channel_id or require_env("DISCORD_CHANNEL_ID")
     url = f"{DISCORD_API_URL}/channels/{channel_id}/messages"
     for index, chunk in enumerate(split_discord_message(content), start=1):
         payload = {"content": chunk}
@@ -269,6 +269,98 @@ def send_discord_message(content):
     if send_discord_webhook(content):
         return
     send_discord_bot_message(content)
+
+
+def extract_markdown_section(content, heading):
+    pattern = re.compile(
+        rf"^##\s+{re.escape(heading)}\s*$\n?(.*?)(?=^##\s+|\Z)",
+        re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    match = pattern.search(content)
+    return match.group(1).strip() if match else ""
+
+
+def discord_content_targets():
+    return {
+        "Threads": {
+            "webhook": os.environ.get("DISCORD_WEBHOOK_짧은글", "").strip(),
+            "channel": os.environ.get("DISCORD_CHANNEL_SHORT_DRAFT", "").strip(),
+        },
+        "Blog": {
+            "webhook": os.environ.get("DISCORD_WEBHOOK_블로그", "").strip(),
+            "channel": os.environ.get("DISCORD_CHANNEL_BLOG_DRAFT", "").strip(),
+        },
+        "Card News": {
+            "webhook": os.environ.get("DISCORD_WEBHOOK_인스타", "").strip(),
+            "channel": os.environ.get("DISCORD_CHANNEL_CARDNEWS_DRAFT", "").strip(),
+        },
+        "촬영 지시서": {
+            "webhook": os.environ.get("DISCORD_WEBHOOK_촬영지시서", "").strip(),
+            "channel": os.environ.get("DISCORD_CHANNEL_SHOOTING_GUIDE", "").strip(),
+        },
+        "승인대기": {
+            "webhook": (
+                os.environ.get("DISCORD_WEBHOOK_승인대기", "").strip()
+                or os.environ.get("DISCORD_WEBHOOK_REVIEW", "").strip()
+            ),
+            "channel": (
+                os.environ.get("DISCORD_CHANNEL_REVIEW", "").strip()
+                or os.environ.get("DISCORD_CHANNEL_ID", "").strip()
+            ),
+        },
+    }
+
+
+def send_discord_target(content, target):
+    if target["webhook"]:
+        send_discord_webhook(content, target["webhook"])
+        return
+    if target["channel"]:
+        send_discord_bot_message(content, target["channel"])
+        return
+    raise RuntimeError("Discord target has neither a webhook nor a bot channel")
+
+
+def send_marketing_channels(content, research, now):
+    targets = discord_content_targets()
+    draft_targets = {name: target for name, target in targets.items() if name != "승인대기"}
+    if not all(target["webhook"] or target["channel"] for target in targets.values()):
+        log("Discord", "channel routing incomplete; sending combined draft to legacy review target")
+        message = (
+            f"## 굽네 마케팅 검수 초안\n"
+            f"- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"- {research_summary(research)}\n\n{content}"
+        )
+        send_discord_message(message)
+        return
+
+    for heading, target in draft_targets.items():
+        section = extract_markdown_section(content, heading)
+        if not section:
+            raise RuntimeError(f"Generated content is missing required section: {heading}")
+        message = (
+            f"## {heading} 초안\n"
+            f"- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n\n"
+            f"{section}"
+        )
+        log("Discord", f"send started: {heading}")
+        send_discord_target(message, target)
+        log("Discord", f"success: {heading}")
+
+    review_parts = []
+    for heading in ("오늘의 콘텐츠 방향", "사용 근거", "검수 체크리스트"):
+        section = extract_markdown_section(content, heading)
+        if section:
+            review_parts.append(f"## {heading}\n{section}")
+    review_message = (
+        f"## 오늘의 콘텐츠 승인대기\n"
+        f"- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"- 각 형식별 초안이 전용 채널에 전송되었습니다.\n\n"
+        + "\n\n".join(review_parts)
+    )
+    log("Discord", "send started: 승인대기")
+    send_discord_target(review_message, targets["승인대기"])
+    log("Discord", "success: 승인대기")
 
 
 def build_content_prompt(research):
@@ -333,6 +425,9 @@ def build_content_prompt(research):
 ## Card News
 카드 1~8. 각 카드는 사진/디자인 담당자가 이해할 수 있는 장면 지시 한 줄과 카피 한 줄을 포함한다.
 
+## 촬영 지시서
+카드뉴스와 다른 채널에 공통으로 활용할 수 있는 실제 촬영 컷 6~10개. 각 컷마다 촬영 목적, 구도, 필요한 소품, 피해야 할 요소를 짧게 적는다.
+
 ## 검수 체크리스트
 사실 확인, 표현 수정, 필요한 사진 또는 운영 확인 항목을 3~5개.
 """.strip(),
@@ -352,6 +447,20 @@ def run_discord_test():
     log("Discord", "success")
 
 
+def run_discord_channels_test():
+    targets = discord_content_targets()
+    missing = [
+        name for name, target in targets.items()
+        if not target["webhook"] and not target["channel"]
+    ]
+    if missing:
+        raise RuntimeError(f"Missing Discord channel configuration: {', '.join(missing)}")
+    for name, target in targets.items():
+        log("Discord", f"channel test started: {name}")
+        send_discord_target(f"Hermes channel routing test: {name}", target)
+        log("Discord", f"channel test success: {name}")
+
+
 def run_research_test():
     research = research_snapshot()
     print(research_summary(research))
@@ -369,13 +478,8 @@ def run_marketing_job():
     )
     log("LLM", "success")
     now = datetime.now(configured_timezone())
-    message = (
-        f"## 굽네 마케팅 검수 초안\n"
-        f"- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-        f"- {research_summary(research)}\n\n{content}"
-    )
     log("Discord", "send started")
-    send_discord_message(message)
+    send_marketing_channels(content, research, now)
     log("Discord", "success")
     log("Job", "completed")
 
@@ -405,6 +509,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run the full marketing pipeline once")
     parser.add_argument("--test-llm", action="store_true", help="Send a tiny OpenRouter request")
     parser.add_argument("--test-discord", action="store_true", help="Send a Discord test message")
+    parser.add_argument("--test-discord-channels", action="store_true", help="Test every marketing Discord channel")
     parser.add_argument("--test-research", action="store_true", help="Inspect Obsidian and Korean trend inputs")
     parser.add_argument("--test-gdrive", action="store_true", help="Verify locally synced Obsidian markdown files")
     parser.add_argument("--scheduler", action="store_true", help="Run the daily scheduler loop")
@@ -414,6 +519,8 @@ def main():
             run_llm_test()
         elif args.test_discord:
             run_discord_test()
+        elif args.test_discord_channels:
+            run_discord_channels_test()
         elif args.test_research or args.test_gdrive:
             run_research_test()
         elif args.scheduler:

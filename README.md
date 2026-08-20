@@ -41,6 +41,16 @@ This template goes beyond a basic Hermes deploy:
 | `DISCORD_WEBHOOK_승인대기` | Existing webhook alias used by this Railway project. |
 | `DISCORD_BOT_TOKEN` | Optional fallback Discord bot token. |
 | `DISCORD_CHANNEL_ID` | Optional fallback Discord channel ID for bot sending. |
+| `DISCORD_CHANNEL_SHORT_DRAFT` | Channel ID for Threads/short-form drafts. |
+| `DISCORD_CHANNEL_BLOG_DRAFT` | Channel ID for blog drafts. |
+| `DISCORD_CHANNEL_CARDNEWS_DRAFT` | Channel ID for Instagram card-news copy. |
+| `DISCORD_CHANNEL_SHOOTING_GUIDE` | Channel ID for shooting instructions. |
+| `DISCORD_CHANNEL_REVIEW` | Channel ID for the compact approval summary. |
+| `DISCORD_WEBHOOK_짧은글` | Preferred webhook for Threads/short-form drafts. |
+| `DISCORD_WEBHOOK_블로그` | Preferred webhook for blog drafts. |
+| `DISCORD_WEBHOOK_인스타` | Preferred webhook for Instagram card-news copy. |
+| `DISCORD_WEBHOOK_촬영지시서` | Preferred webhook for shooting instructions. |
+| `DISCORD_WEBHOOK_승인대기` | Preferred webhook for the compact approval summary. |
 | `MARKETING_SCHEDULER_ENABLED` | Set `true` to run the daily marketing pipeline. Keep `false` until manual tests pass. |
 | `MARKETING_RUN_TIME` | Daily run time in `HH:MM`, interpreted using `TZ`. |
 | `MARKETING_SOURCE_TOPIC` | Fallback source topic for manual and scheduled tests. |
