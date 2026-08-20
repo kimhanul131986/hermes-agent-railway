@@ -4,20 +4,26 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DISCORD_API_URL = "https://discord.com/api/v10"
 USER_AGENT = "goobne-hermes-marketing-pipeline/1.0"
-DEFAULT_MODEL = "anthropic/claude-3.5-sonnet"
+DEFAULT_MODEL = "~anthropic/claude-sonnet-latest"
 DEFAULT_TOPIC = "홍대에서 외국인 친구와 치맥하기 좋은 이유"
 DEFAULT_ENV_FILES = ("/root/.hermes/.env", ".env")
+DEFAULT_OBSIDIAN_PATH = "/root/.hermes/drive/obsidian"
+DEFAULT_TRENDS_RSS_URL = "https://trends.google.com/trending/rss?geo=KR"
 
 
 def configured_timezone():
@@ -50,6 +56,79 @@ def load_env_files():
         except OSError as exc:
             log("ENV ERROR", f"Could not read {path}: {exc}")
 
+
+
+def clip_text(value, limit):
+    value = re.sub(r"\s+", " ", value).strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit].rstrip() + "…"
+
+
+def read_obsidian_sources():
+    root = Path(os.environ.get("GDRIVE_LOCAL_PATH", DEFAULT_OBSIDIAN_PATH))
+    if not root.exists():
+        log("Obsidian", f"source folder not found: {root}")
+        return []
+    max_files = max(1, int(os.environ.get("OBSIDIAN_MAX_FILES", "12")))
+    max_chars = max(400, int(os.environ.get("OBSIDIAN_MAX_CHARS", "12000")))
+    files = sorted(
+        (path for path in root.rglob("*.md") if not any(part.startswith(".") for part in path.parts)),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    sources = []
+    remaining = max_chars
+    for path in files[:max_files]:
+        if remaining <= 0:
+            break
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            log("Obsidian", f"could not read {path.name}: {exc}")
+            continue
+        excerpt = clip_text(raw, min(1800, remaining))
+        if not excerpt:
+            continue
+        sources.append({
+            "file": str(path.relative_to(root)).replace("\\", "/"),
+            "updated": datetime.fromtimestamp(path.stat().st_mtime, configured_timezone()).strftime("%Y-%m-%d %H:%M"),
+            "excerpt": excerpt,
+        })
+        remaining -= len(excerpt)
+    log("Obsidian", f"loaded {len(sources)} markdown source(s)")
+    return sources
+
+
+def fetch_korean_trends():
+    url = os.environ.get("TRENDS_RSS_URL", DEFAULT_TRENDS_RSS_URL).strip()
+    limit = max(1, int(os.environ.get("TRENDS_MAX_ITEMS", "20")))
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=int(os.environ.get("TRENDS_TIMEOUT_SECONDS", "20"))) as response:
+            root = ET.fromstring(response.read())
+    except (urllib.error.URLError, urllib.error.HTTPError, ET.ParseError) as exc:
+        log("Trends", f"could not fetch Korean trends: {exc}")
+        return []
+    trends = []
+    for item in root.findall("./channel/item"):
+        title = (item.findtext("title") or "").strip()
+        if title and title not in trends:
+            trends.append(title)
+        if len(trends) >= limit:
+            break
+    log("Trends", f"loaded {len(trends)} Korean trend(s)")
+    return trends
+
+
+def research_snapshot():
+    return {"obsidian": read_obsidian_sources(), "trends": fetch_korean_trends()}
+
+
+def research_summary(research):
+    source_files = ", ".join(source["file"] for source in research["obsidian"]) or "없음"
+    trends = ", ".join(research["trends"][:10]) or "가져오지 못함"
+    return f"Obsidian 자료: {source_files}\n트렌드 후보: {trends}"
 
 def require_env(name):
     value = os.environ.get(name, "").strip()
@@ -179,39 +258,73 @@ def send_discord_message(content):
     send_discord_bot_message(content)
 
 
-def build_content_prompt(topic):
+def build_content_prompt(research):
     store_name = os.environ.get("STORE_NAME", "굽네치킨 홍대 레드로드점")
+    fallback_topic = os.environ.get("MARKETING_SOURCE_TOPIC", DEFAULT_TOPIC).strip() or DEFAULT_TOPIC
+    sources = research["obsidian"]
+    trends = research["trends"]
+    source_text = "\n\n".join(
+        f"[Obsidian: {source['file']} | updated {source['updated']}]\n{source['excerpt']}"
+        for source in sources
+    ) or "(동기화된 Obsidian 자료 없음)"
+    trend_text = "\n".join(f"- {trend}" for trend in trends) or "(트렌드 수집 실패 또는 결과 없음)"
     return [
         {
             "role": "system",
-            "content": "너는 한국 치킨 매장의 실전 마케팅 담당자다. 과장 광고를 피하고, 사람이 Discord에서 검수하기 좋은 초안만 만든다.",
+            "content": (
+                "너는 굽네치킨 홍대 레드로드점의 시니어 로컬 마케팅 에디터다. "
+                "매장 자료에 근거한 내용만 사실처럼 표현하고, 확인되지 않은 가격·할인·영업시간·메뉴·후기를 지어내지 않는다. "
+                "전국 트렌드는 홍대 레드로드점 및 치킨 방문 맥락과 자연스럽게 연결될 때만 사용한다. "
+                "연결이 억지라면 트렌드를 사용하지 말고 그 이유를 검수 메모에 적는다. "
+                "광고 문구보다 구체적 장면, 손님 상황, 실제 방문 동선을 우선한다."
+            ),
         },
         {
             "role": "user",
             "content": f"""
 매장: {store_name}
-오늘의 원본 주제: {topic}
+자료가 전혀 없을 때만 사용할 보조 주제: {fallback_topic}
 
-하루에 서로 다른 콘텐츠 3개가 아니라, 하나의 원본 주제를 아래 3개 형식으로 변환해줘.
+아래는 Google Drive에서 동기화된 Obsidian 최근 자료다.
+--- Obsidian 자료 ---
+{source_text}
+
+아래는 오늘의 한국 검색 트렌드 후보다.
+--- 트렌드 후보 ---
+{trend_text}
+
+위 근거를 먼저 읽고, 오늘 매장과 가장 잘 맞는 콘텐츠 방향을 하나 선택해 한국어 초안을 작성해줘.
+
+필수 원칙:
+- 사용한 Obsidian 파일명과 사용한 트렌드만 정확히 표시한다.
+- 근거에 없는 행사·가격·메뉴·후기·운영 정보는 넣지 않는다.
+- 트렌드가 매장과 무관하면 억지로 연결하지 않는다.
+- 문장마다 과장된 감탄사와 흔한 AI 표현을 피한다.
+- 직원이 사실 여부를 빠르게 확인할 수 있게 검수 포인트를 준다.
 
 출력 형식:
-## Source
-원본 주제 한 줄
+## 오늘의 콘텐츠 방향
+선택한 주제와 선택 이유 2~3문장
+
+## 사용 근거
+- Obsidian: 파일명 또는 없음
+- Trend: 키워드 또는 사용 안 함
+- 확인 필요: 직원 확인 항목
 
 ## Threads
-짧고 자연스러운 SNS 글. 이모지 과다 사용 금지.
+서로 다른 톤의 짧은 글 2안. 각 안에 자연스러운 행동 유도 한 줄 포함.
 
 ## Blog
-검색 유입을 고려한 블로그 초안. 제목, 도입, 본문 소제목 3개, 마무리 포함.
+제목 3개, 도입, 소제목 3개가 있는 본문, 마무리. 검색어를 억지로 반복하지 않는다.
 
 ## Card News
-7~10장 카드뉴스 카피. 각 장은 "카드 1:" 형식.
+카드 1~8. 각 카드는 사진/디자인 담당자가 이해할 수 있는 장면 지시 한 줄과 카피 한 줄을 포함한다.
 
-검수자가 바로 볼 수 있도록 한국어로 작성해.
+## 검수 체크리스트
+사실 확인, 표현 수정, 필요한 사진 또는 운영 확인 항목을 3~5개.
 """.strip(),
         },
     ]
-
 
 def run_llm_test():
     log("LLM", "request started")
@@ -226,15 +339,28 @@ def run_discord_test():
     log("Discord", "success")
 
 
+def run_research_test():
+    research = research_snapshot()
+    print(research_summary(research))
+
+
 def run_marketing_job():
     log("Job", "started")
-    topic = os.environ.get("MARKETING_SOURCE_TOPIC", DEFAULT_TOPIC).strip() or DEFAULT_TOPIC
-    log("Hermes", "job started")
+    log("Hermes", "research started")
+    research = research_snapshot()
+    log("Hermes", "research completed")
     log("LLM", "request started")
-    content = openrouter_request(build_content_prompt(topic))
+    content = openrouter_request(
+        build_content_prompt(research),
+        max_tokens=int(os.environ.get("MARKETING_MAX_TOKENS", "3200")),
+    )
     log("LLM", "success")
     now = datetime.now(configured_timezone())
-    message = f"## 굽네 마케팅 검수 초안\n- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n- Source: {topic}\n\n{content}"
+    message = (
+        f"## 굽네 마케팅 검수 초안\n"
+        f"- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"- {research_summary(research)}\n\n{content}"
+    )
     log("Discord", "send started")
     send_discord_message(message)
     log("Discord", "success")
@@ -266,6 +392,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="Run the full marketing pipeline once")
     parser.add_argument("--test-llm", action="store_true", help="Send a tiny OpenRouter request")
     parser.add_argument("--test-discord", action="store_true", help="Send a Discord test message")
+    parser.add_argument("--test-research", action="store_true", help="Inspect Obsidian and Korean trend inputs")
     parser.add_argument("--scheduler", action="store_true", help="Run the daily scheduler loop")
     args = parser.parse_args()
     try:
@@ -273,6 +400,8 @@ def main():
             run_llm_test()
         elif args.test_discord:
             run_discord_test()
+        elif args.test_research:
+            run_research_test()
         elif args.scheduler:
             scheduler_loop()
         elif args.once:
