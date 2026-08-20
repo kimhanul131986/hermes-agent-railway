@@ -341,9 +341,9 @@ def require_env(name):
     return value
 
 
-def openrouter_request(messages, max_tokens=1800):
+def openrouter_request(messages, max_tokens=1800, model=None):
     api_key = require_env("OPENROUTER_API_KEY")
-    model = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    model = (model or os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)).strip() or DEFAULT_MODEL
     payload = {
         "model": model,
         "messages": messages,
@@ -498,6 +498,7 @@ def select_daily_topic(research, history=None):
         response = openrouter_request(
             build_topic_selection_prompt(research, history, rejected_topics),
             max_tokens=int(os.environ.get("MARKETING_TOPIC_MAX_TOKENS", "1800")),
+            model=os.environ.get("OPENROUTER_TOPIC_MODEL", "").strip() or None,
         )
         selection = validate_selected_topic(parse_json_object(response), research)
         duplicate = find_duplicate_topic(selection["topic"], history)
@@ -819,6 +820,7 @@ def run_marketing_job():
     content = openrouter_request(
         build_content_prompt(research, selection),
         max_tokens=int(os.environ.get("MARKETING_MAX_TOKENS", "3200")),
+        model=os.environ.get("OPENROUTER_CONTENT_MODEL", "").strip() or None,
     )
     log("LLM", "success")
     now = datetime.now(configured_timezone())

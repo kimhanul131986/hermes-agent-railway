@@ -36,6 +36,8 @@ This template goes beyond a basic Hermes deploy:
 | `TZ` | Runtime timezone. Use `Asia/Seoul` for Korea scheduling. |
 | `OPENROUTER_API_KEY` | OpenRouter key used by the marketing review pipeline. |
 | `OPENROUTER_MODEL` | OpenRouter model, for example `anthropic/claude-3.5-sonnet`. |
+| `OPENROUTER_TOPIC_MODEL` | Optional lower-cost model used only to select the daily topic. |
+| `OPENROUTER_CONTENT_MODEL` | Optional model used only to create the platform drafts. |
 | `DISCORD_WEBHOOK_REVIEW` | Preferred Discord webhook for `#03-검수대기`. |
 | `DISCORD_WEBHOOK_검수대기` | Korean alias for the review webhook. |
 | `DISCORD_WEBHOOK_승인대기` | Existing webhook alias used by this Railway project. |

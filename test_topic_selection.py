@@ -44,6 +44,15 @@ class TopicSelectionTests(unittest.TestCase):
         self.assertEqual(selection["topic"], "홍대 모임에서 오븐구이 메뉴를 고르는 기준")
         self.assertEqual(request.call_count, 2)
 
+    def test_uses_dedicated_topic_model_when_configured(self):
+        with patch.dict(os.environ, {"OPENROUTER_TOPIC_MODEL": "openai/gpt-4.1-mini"}), patch.object(
+            marketing_pipeline,
+            "openrouter_request",
+            return_value=self.response("홍대 모임 장소 선택 기준"),
+        ) as request:
+            marketing_pipeline.select_daily_topic(self.research, [])
+        self.assertEqual(request.call_args.kwargs["model"], "openai/gpt-4.1-mini")
+
     def test_rejects_unknown_source_file(self):
         response = json.dumps(
             {
