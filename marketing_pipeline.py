@@ -598,12 +598,25 @@ def send_discord_message(content):
 
 
 def extract_markdown_section(content, heading):
-    pattern = re.compile(
-        rf"^#{{2,4}}\s*[^\n]*{re.escape(heading)}[^\n]*$\n?(.*?)(?=^#{{2,4}}\s+|\Z)",
-        re.MULTILINE | re.DOTALL | re.IGNORECASE,
-    )
-    match = pattern.search(content)
-    return match.group(1).strip() if match else ""
+    heading_pattern = re.compile(r"^(#{2,6})\s+(.+?)\s*$", re.MULTILINE)
+    matches = list(heading_pattern.finditer(content))
+    target = None
+    target_text = str(heading).strip().lower()
+    for match in matches:
+        if target_text in match.group(2).strip().lower():
+            target = match
+            break
+    if target is None:
+        return ""
+    target_level = len(target.group(1))
+    end = len(content)
+    for match in matches:
+        if match.start() <= target.start():
+            continue
+        if len(match.group(1)) <= target_level:
+            end = match.start()
+            break
+    return content[target.end():end].strip()
 
 
 def discord_content_targets():
