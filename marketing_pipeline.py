@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DISCORD_API_URL = "https://discord.com/api/v10"
+USER_AGENT = "goobne-hermes-marketing-pipeline/1.0"
 DEFAULT_MODEL = "anthropic/claude-3.5-sonnet"
 DEFAULT_TOPIC = "홍대에서 외국인 친구와 치맥하기 좋은 이유"
 
@@ -104,7 +105,7 @@ def send_discord_webhook(content):
         request = urllib.request.Request(
             url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
             method="POST",
         )
         try:
@@ -130,7 +131,7 @@ def send_discord_bot_message(content):
             headers={
                 "Authorization": f"Bot {token}",
                 "Content-Type": "application/json",
-                "User-Agent": "goobne-hermes-marketing-pipeline/1.0",
+                "User-Agent": USER_AGENT,
             },
             method="POST",
         )
