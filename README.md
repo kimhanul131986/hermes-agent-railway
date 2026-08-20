@@ -36,8 +36,11 @@ This template goes beyond a basic Hermes deploy:
 | `TZ` | Runtime timezone. Use `Asia/Seoul` for Korea scheduling. |
 | `OPENROUTER_API_KEY` | OpenRouter key used by the marketing review pipeline. |
 | `OPENROUTER_MODEL` | OpenRouter model, for example `anthropic/claude-3.5-sonnet`. |
-| `DISCORD_BOT_TOKEN` | Discord bot token used to send review messages. |
-| `DISCORD_CHANNEL_ID` | Discord channel ID for `#03-검수대기`. |
+| `DISCORD_WEBHOOK_REVIEW` | Preferred Discord webhook for `#03-검수대기`. |
+| `DISCORD_WEBHOOK_검수대기` | Korean alias for the review webhook. |
+| `DISCORD_WEBHOOK_승인대기` | Existing webhook alias used by this Railway project. |
+| `DISCORD_BOT_TOKEN` | Optional fallback Discord bot token. |
+| `DISCORD_CHANNEL_ID` | Optional fallback Discord channel ID for bot sending. |
 | `MARKETING_SCHEDULER_ENABLED` | Set `true` to run the daily marketing pipeline. Keep `false` until manual tests pass. |
 | `MARKETING_RUN_TIME` | Daily run time in `HH:MM`, interpreted using `TZ`. |
 | `MARKETING_SOURCE_TOPIC` | Fallback source topic for manual and scheduled tests. |
