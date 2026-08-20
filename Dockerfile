@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates ripgrep ffmpeg rclone \
+    git curl ca-certificates ripgrep ffmpeg \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -13,7 +13,8 @@ RUN git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.
 
 WORKDIR /opt/hermes-agent
 RUN uv venv venv --python 3.11 \
-    && VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install -e ".[all]"
+    && VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install -e ".[all]" \
+    && VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install google-api-python-client google-auth
 
 ENV PATH="/opt/hermes-agent/venv/bin:$PATH"
 
@@ -24,6 +25,7 @@ RUN mkdir -p /root/.hermes/{cron,sessions,logs,memories,skills,pairing,hooks,ima
 COPY auth_proxy.py /auth_proxy.py
 COPY entrypoint.sh /entrypoint.sh
 COPY marketing_pipeline.py /marketing_pipeline.py
+COPY gdrive_sync.py /gdrive_sync.py
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

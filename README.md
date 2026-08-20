@@ -45,7 +45,7 @@ This template goes beyond a basic Hermes deploy:
 | `MARKETING_RUN_TIME` | Daily run time in `HH:MM`, interpreted using `TZ`. |
 | `MARKETING_SOURCE_TOPIC` | Fallback source topic for manual and scheduled tests. |
 | `STORE_NAME` | Store name included in the generation prompt. |
-| `GDRIVE_SOURCE_SUBPATH` | Folder below `GDRIVE_ROOT_FOLDER_ID` to sync (default: `Obsidian`; use an empty value when the root ID is already the Obsidian folder). |
+| `GDRIVE_SOURCE_SUBPATH` | Folder below `GDRIVE_ROOT_FOLDER_ID` to sync through Drive API (default: `02_wiki`; use `/` to sync Markdown from the root). |
 | `MARKETING_REQUIRE_OBSIDIAN` | Fail safely instead of generating an ungrounded draft when no Markdown sources are available (default: `true`). |
 
 All other Hermes configuration is still available through the dashboard after deploy.
