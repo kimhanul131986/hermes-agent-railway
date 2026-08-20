@@ -87,7 +87,38 @@ def split_discord_message(content):
     return chunks
 
 
-def send_discord_message(content):
+def discord_webhook_url():
+    return (
+        os.environ.get("DISCORD_WEBHOOK_REVIEW", "").strip()
+        or os.environ.get("DISCORD_WEBHOOK_검수대기", "").strip()
+        or os.environ.get("DISCORD_WEBHOOK_승인대기", "").strip()
+    )
+
+
+def send_discord_webhook(content):
+    url = discord_webhook_url()
+    if not url:
+        return False
+    for index, chunk in enumerate(split_discord_message(content), start=1):
+        payload = {"content": chunk}
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=int(os.environ.get("DISCORD_TIMEOUT_SECONDS", "30"))) as response:
+                response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:800]
+            raise RuntimeError(f"Discord webhook HTTP {exc.code} on chunk {index}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Discord webhook network error on chunk {index}: {exc.reason}") from exc
+    return True
+
+
+def send_discord_bot_message(content):
     token = require_env("DISCORD_BOT_TOKEN")
     channel_id = require_env("DISCORD_CHANNEL_ID")
     url = f"{DISCORD_API_URL}/channels/{channel_id}/messages"
@@ -108,9 +139,15 @@ def send_discord_message(content):
                 response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:800]
-            raise RuntimeError(f"Discord HTTP {exc.code} on chunk {index}: {detail}") from exc
+            raise RuntimeError(f"Discord bot HTTP {exc.code} on chunk {index}: {detail}") from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"Discord network error on chunk {index}: {exc.reason}") from exc
+            raise RuntimeError(f"Discord bot network error on chunk {index}: {exc.reason}") from exc
+
+
+def send_discord_message(content):
+    if send_discord_webhook(content):
+        return
+    send_discord_bot_message(content)
 
 
 def build_content_prompt(topic):
