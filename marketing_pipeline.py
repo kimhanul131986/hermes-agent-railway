@@ -2,6 +2,7 @@
 """Minimal marketing review pipeline for the Hermes Railway container."""
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -24,6 +25,13 @@ DEFAULT_TOPIC = "홍대에서 외국인 친구와 치맥하기 좋은 이유"
 DEFAULT_ENV_FILES = ("/root/.hermes/.env", ".env")
 DEFAULT_OBSIDIAN_PATH = "/root/.hermes/drive/obsidian"
 DEFAULT_TRENDS_RSS_URL = "https://trends.google.com/trending/rss?geo=KR"
+DEFAULT_TOPIC_HISTORY_PATH = "/root/.hermes/marketing/topic_history.json"
+DEFAULT_TOPIC_HISTORY_LIMIT = 30
+DEFAULT_TREND_KEYWORDS = (
+    "홍대,홍익대,연남,합정,상수,마포,서울,레드로드,"
+    "치킨,치맥,맥주,오븐,구이,맛집,외식,야식,회식,모임,데이트,"
+    "외국인,관광,K푸드,K-food,축제,공연,날씨,비,장마,눈,폭염,더위,추위,주말"
+)
 
 
 def configured_timezone():
@@ -57,6 +65,126 @@ def load_env_files():
             log("ENV ERROR", f"Could not read {path}: {exc}")
 
 
+def topic_history_path():
+    return Path(os.environ.get("MARKETING_TOPIC_HISTORY_PATH", DEFAULT_TOPIC_HISTORY_PATH))
+
+
+def load_topic_history(limit=DEFAULT_TOPIC_HISTORY_LIMIT):
+    """Return the newest saved marketing topics without modifying the history file."""
+    path = topic_history_path()
+    if not path.exists():
+        log("History", f"no topic history yet: {path}")
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not read topic history {path}: {exc}") from exc
+    if not isinstance(payload, list):
+        raise RuntimeError(f"Topic history must be a JSON array: {path}")
+
+    history = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"Topic history item {index} must be an object: {path}")
+        topic = str(item.get("topic", "")).strip()
+        if not topic:
+            raise RuntimeError(f"Topic history item {index} has no topic: {path}")
+        normalized = dict(item)
+        normalized["topic"] = topic
+        history.append(normalized)
+    bounded_limit = max(1, int(limit))
+    result = history[:bounded_limit]
+    log("History", f"loaded {len(result)} recent topic(s)")
+    return result
+
+
+def record_topic_history(topic, angle="", status="draft_sent", details=None, now=None):
+    """Atomically prepend one topic and retain only the newest configured entries."""
+    topic = str(topic).strip()
+    if not topic:
+        raise ValueError("topic must not be empty")
+    limit = max(1, int(os.environ.get("MARKETING_TOPIC_HISTORY_LIMIT", str(DEFAULT_TOPIC_HISTORY_LIMIT))))
+    history = load_topic_history(limit=limit)
+    timestamp = now or datetime.now(configured_timezone())
+    entry = {
+        "date": timestamp.strftime("%Y-%m-%d"),
+        "recorded_at": timestamp.isoformat(),
+        "topic": topic,
+        "angle": str(angle).strip(),
+        "status": str(status).strip() or "draft_sent",
+    }
+    if details:
+        entry["details"] = details
+
+    path = topic_history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps([entry] + history[: limit - 1], ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError as exc:
+        raise RuntimeError(f"Could not write topic history {path}: {exc}") from exc
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    log("History", f"recorded topic with status={entry['status']}; retained up to {limit}")
+    return entry
+
+
+def normalize_topic(value):
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(value).lower())
+
+
+def topic_ngrams(value, size=2):
+    normalized = normalize_topic(value)
+    if len(normalized) <= size:
+        return {normalized} if normalized else set()
+    return {normalized[index:index + size] for index in range(len(normalized) - size + 1)}
+
+
+def topic_similarity(left, right):
+    left_normalized = normalize_topic(left)
+    right_normalized = normalize_topic(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    sequence_score = difflib.SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    left_ngrams = topic_ngrams(left)
+    right_ngrams = topic_ngrams(right)
+    union = left_ngrams | right_ngrams
+    ngram_score = len(left_ngrams & right_ngrams) / len(union) if union else 0.0
+    return max(sequence_score, ngram_score)
+
+
+def find_duplicate_topic(candidate, history, threshold=None):
+    """Return the closest recent history item when a candidate is too similar."""
+    candidate = str(candidate).strip()
+    if not candidate:
+        raise ValueError("candidate topic must not be empty")
+    configured_threshold = float(
+        threshold if threshold is not None
+        else os.environ.get("MARKETING_TOPIC_DUPLICATE_THRESHOLD", "0.72")
+    )
+    best_match = None
+    for item in history[:DEFAULT_TOPIC_HISTORY_LIMIT]:
+        previous_topic = str(item.get("topic", "")).strip()
+        if not previous_topic:
+            continue
+        score = topic_similarity(candidate, previous_topic)
+        if best_match is None or score > best_match["score"]:
+            best_match = {"score": score, "history": item}
+    if best_match and best_match["score"] >= configured_threshold:
+        log(
+            "History",
+            f"duplicate topic rejected: similarity={best_match['score']:.2f}, "
+            f"previous={best_match['history']['topic']}",
+        )
+        return best_match
+    return None
+
+
 
 def clip_text(value, limit):
     value = re.sub(r"\s+", " ", value).strip()
@@ -65,25 +193,51 @@ def clip_text(value, limit):
     return value[:limit].rstrip() + "…"
 
 
+def obsidian_priority_rank(path, root):
+    relative = path.relative_to(root)
+    parts = {part.lower() for part in relative.parts[:-1]}
+    filename = relative.name.lower()
+    if "00_운영규칙" in parts or filename.endswith("_rule.md"):
+        return 0
+    if "store" in parts or "매장" in filename or "운영정보" in filename:
+        return 1
+    if "03_브랜드스타일" in parts or "브랜드" in filename or "말투" in filename:
+        return 2
+    if "01_제품지식" in parts or "제품지식" in filename or "메뉴" in filename:
+        return 3
+    return None
+
+
 def read_obsidian_sources():
     root = Path(os.environ.get("GDRIVE_LOCAL_PATH", DEFAULT_OBSIDIAN_PATH))
     if not root.exists():
         log("Obsidian", f"source folder not found: {root}")
         return []
     max_files = max(1, int(os.environ.get("OBSIDIAN_MAX_FILES", "12")))
+    priority_max_files = max(
+        1,
+        min(max_files, int(os.environ.get("OBSIDIAN_PRIORITY_MAX_FILES", "8"))),
+    )
     max_chars = max(400, int(os.environ.get("OBSIDIAN_MAX_CHARS", "12000")))
-    files = sorted(
-        (
-            path
-            for path in root.rglob("*.md")
-            if not any(part.startswith(".") for part in path.relative_to(root).parts)
-        ),
+    discovered = [
+        path
+        for path in root.rglob("*.md")
+        if not any(part.startswith(".") for part in path.relative_to(root).parts)
+    ]
+    priority_files = sorted(
+        (path for path in discovered if obsidian_priority_rank(path, root) is not None),
+        key=lambda path: (obsidian_priority_rank(path, root), -path.stat().st_mtime),
+    )[:priority_max_files]
+    priority_set = set(priority_files)
+    recent_files = sorted(
+        (path for path in discovered if path not in priority_set),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+    files = priority_files + recent_files[: max_files - len(priority_files)]
     sources = []
     remaining = max_chars
-    for path in files[:max_files]:
+    for path in files:
         if remaining <= 0:
             break
         try:
@@ -100,7 +254,15 @@ def read_obsidian_sources():
             "excerpt": excerpt,
         })
         remaining -= len(excerpt)
-    log("Obsidian", f"loaded {len(sources)} markdown source(s)")
+    loaded_priority = sum(
+        1 for source in sources
+        if obsidian_priority_rank(root / source["file"], root) is not None
+    )
+    log(
+        "Obsidian",
+        f"loaded {len(sources)} markdown source(s); priority={loaded_priority}, "
+        f"recent={len(sources) - loaded_priority}",
+    )
     return sources
 
 
@@ -125,6 +287,30 @@ def fetch_korean_trends():
     return trends
 
 
+def trend_relevance_keywords():
+    raw = os.environ.get("TREND_RELEVANCE_KEYWORDS", DEFAULT_TREND_KEYWORDS)
+    return [keyword.strip().lower() for keyword in raw.split(",") if keyword.strip()]
+
+
+def filter_relevant_trends(trends, obsidian_sources=None):
+    """Keep only trends with an explicit store keyword or a matching Obsidian mention."""
+    keywords = trend_relevance_keywords()
+    source_text = " ".join(
+        source.get("excerpt", "") for source in (obsidian_sources or [])
+    ).lower()
+    relevant = []
+    for trend in trends:
+        lowered = str(trend).lower().strip()
+        if not lowered:
+            continue
+        direct_match = any(keyword in lowered for keyword in keywords)
+        source_match = len(lowered) >= 2 and lowered in source_text
+        if (direct_match or source_match) and trend not in relevant:
+            relevant.append(trend)
+    log("Trends", f"selected {len(relevant)} relevant trend(s) from {len(trends)}")
+    return relevant
+
+
 def research_snapshot():
     obsidian = read_obsidian_sources()
     require_obsidian = os.environ.get("MARKETING_REQUIRE_OBSIDIAN", "true").strip().lower() in {
@@ -135,7 +321,12 @@ def research_snapshot():
             "Obsidian source check failed: no markdown files were loaded from "
             f"{os.environ.get('GDRIVE_LOCAL_PATH', DEFAULT_OBSIDIAN_PATH)}"
         )
-    return {"obsidian": obsidian, "trends": fetch_korean_trends()}
+    all_trends = fetch_korean_trends()
+    return {
+        "obsidian": obsidian,
+        "trends": filter_relevant_trends(all_trends, obsidian),
+        "trends_all": all_trends,
+    }
 
 
 def research_summary(research):
@@ -179,9 +370,143 @@ def openrouter_request(messages, max_tokens=1800):
     except urllib.error.URLError as exc:
         raise RuntimeError(f"OpenRouter network error: {exc.reason}") from exc
     try:
-        return body["choices"][0]["message"]["content"].strip()
+        choice = body["choices"][0]
+        content = choice["message"].get("content")
     except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"Unexpected OpenRouter response shape: {json.dumps(body)[:800]}") from exc
+        raise RuntimeError("Unexpected OpenRouter response shape") from exc
+    if not isinstance(content, str) or not content.strip():
+        finish_reason = choice.get("finish_reason", "unknown")
+        raise RuntimeError(f"OpenRouter returned empty content; finish_reason={finish_reason}")
+    return content.strip()
+
+
+def parse_json_object(value):
+    text = str(value).strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"LLM returned invalid JSON: {exc.msg}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("LLM JSON response must be an object")
+    return payload
+
+
+def build_topic_selection_prompt(research, history, rejected_topics=None):
+    source_text = "\n\n".join(
+        f"[파일: {source['file']}]\n{source['excerpt']}"
+        for source in research["obsidian"]
+    )
+    history_text = "\n".join(
+        f"- {item['topic']} | 관점: {item.get('angle', '')}"
+        for item in history
+    ) or "- 없음"
+    trend_text = "\n".join(f"- {trend}" for trend in research["trends"]) or "- 관련 트렌드 없음"
+    rejected_text = "\n".join(f"- {topic}" for topic in (rejected_topics or [])) or "- 없음"
+    return [
+        {
+            "role": "system",
+            "content": (
+                "너는 굽네 홍대 레드로드점의 콘텐츠 소재 편집자다. "
+                "제공된 자료에 근거해 오늘 사용할 원본 주제 하나만 고른다. "
+                "확인되지 않은 사실이나 억지 트렌드 연결을 만들지 않는다."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""
+아래 자료를 읽고 오늘의 원본 주제 하나를 선정해.
+
+최근 사용 주제 30개:
+{history_text}
+
+이번 실행에서 중복으로 거절된 후보:
+{rejected_text}
+
+관련성이 확인된 트렌드:
+{trend_text}
+
+Obsidian 자료:
+{source_text}
+
+선정 규칙:
+- 최근 주제 및 거절 후보와 소재나 관점이 겹치지 않아야 한다.
+- 최소 한 개의 Obsidian 파일을 실제 근거로 사용한다.
+- 관련 트렌드가 없거나 연결이 약하면 trend는 null로 둔다.
+- 매장 홍보 문구가 아니라 여러 플랫폼으로 확장 가능한 원본 주제를 고른다.
+- 확인되지 않은 수치, 후기, 운영 경험은 만들지 않는다.
+
+JSON만 출력:
+{{
+  "topic": "오늘의 원본 주제",
+  "angle": "이번 콘텐츠에서 다룰 고유한 관점",
+  "reason": "이 주제를 고른 근거",
+  "source_files": ["실제로 사용한 Obsidian 파일명"],
+  "trend": null
+}}
+""".strip(),
+        },
+    ]
+
+
+def validate_selected_topic(selection, research):
+    topic = str(selection.get("topic", "")).strip()
+    angle = str(selection.get("angle", "")).strip()
+    reason = str(selection.get("reason", "")).strip()
+    source_files = selection.get("source_files", [])
+    trend = selection.get("trend")
+    if not topic or not angle or not reason:
+        raise RuntimeError("Selected topic JSON requires topic, angle, and reason")
+    if not isinstance(source_files, list) or not source_files:
+        raise RuntimeError("Selected topic must cite at least one Obsidian source file")
+    available_sources = {source["file"] for source in research["obsidian"]}
+    basename_map = {}
+    for filename in available_sources:
+        basename_map.setdefault(Path(filename).name, []).append(filename)
+    resolved_sources = []
+    unknown_sources = []
+    for name in source_files:
+        if name in available_sources:
+            resolved_sources.append(name)
+            continue
+        basename_matches = basename_map.get(Path(str(name)).name, [])
+        if len(basename_matches) == 1:
+            resolved_sources.append(basename_matches[0])
+        else:
+            unknown_sources.append(str(name))
+    if unknown_sources:
+        raise RuntimeError(f"Selected topic cited unknown source file(s): {', '.join(unknown_sources)}")
+    if trend is not None and trend not in research["trends"]:
+        raise RuntimeError(f"Selected topic cited an unavailable trend: {trend}")
+    return {
+        "topic": topic,
+        "angle": angle,
+        "reason": reason,
+        "source_files": resolved_sources,
+        "trend": trend,
+    }
+
+
+def select_daily_topic(research, history=None):
+    history = history if history is not None else load_topic_history()
+    max_attempts = max(1, int(os.environ.get("MARKETING_TOPIC_MAX_ATTEMPTS", "3")))
+    rejected_topics = []
+    for attempt in range(1, max_attempts + 1):
+        log("Topic", f"selection request started; attempt={attempt}/{max_attempts}")
+        response = openrouter_request(
+            build_topic_selection_prompt(research, history, rejected_topics),
+            max_tokens=int(os.environ.get("MARKETING_TOPIC_MAX_TOKENS", "1800")),
+        )
+        selection = validate_selected_topic(parse_json_object(response), research)
+        duplicate = find_duplicate_topic(selection["topic"], history)
+        if duplicate:
+            rejected_topics.append(selection["topic"])
+            continue
+        log("Topic", f"selected: {selection['topic']}")
+        return selection
+    raise RuntimeError(f"Could not select a non-duplicate topic after {max_attempts} attempts")
 
 
 def split_discord_message(content):
@@ -369,16 +694,23 @@ def send_marketing_channels(content, research, now):
     log("Discord", "success: 승인대기")
 
 
-def build_content_prompt(research):
+def is_rule_source_name(filename):
+    normalized = str(filename).replace("\\", "/").lower()
+    return "/00_운영규칙/" in f"/{normalized}" or normalized.endswith("_rule.md")
+
+
+def build_content_prompt(research, selected_topic):
     store_name = os.environ.get("STORE_NAME", "굽네치킨 홍대 레드로드점")
-    fallback_topic = os.environ.get("MARKETING_SOURCE_TOPIC", DEFAULT_TOPIC).strip() or DEFAULT_TOPIC
-    sources = research["obsidian"]
-    trends = research["trends"]
+    cited_files = set(selected_topic["source_files"])
+    sources = [
+        source for source in research["obsidian"]
+        if source["file"] in cited_files or is_rule_source_name(source["file"])
+    ]
     source_text = "\n\n".join(
-        f"[Obsidian: {source['file']} | updated {source['updated']}]\n{source['excerpt']}"
+        f"[Obsidian: {source['file']} | updated {source.get('updated', 'unknown')}]\n{source['excerpt']}"
         for source in sources
     ) or "(동기화된 Obsidian 자료 없음)"
-    trend_text = "\n".join(f"- {trend}" for trend in trends) or "(트렌드 수집 실패 또는 결과 없음)"
+    selection_text = json.dumps(selected_topic, ensure_ascii=False, indent=2)
     return [
         {
             "role": "system",
@@ -394,28 +726,29 @@ def build_content_prompt(research):
             "role": "user",
             "content": f"""
 매장: {store_name}
-자료가 전혀 없을 때만 사용할 보조 주제: {fallback_topic}
 
-아래는 Google Drive에서 동기화된 Obsidian 최근 자료다.
+오늘의 원본 주제는 이미 아래와 같이 확정됐다. 다른 주제로 바꾸지 마.
+--- 선정 결과 ---
+{selection_text}
+
+아래는 선정에 사용된 근거와 항상 적용할 운영규칙이다.
 --- Obsidian 자료 ---
 {source_text}
 
-아래는 오늘의 한국 검색 트렌드 후보다.
---- 트렌드 후보 ---
-{trend_text}
-
-위 근거를 먼저 읽고, 오늘 매장과 가장 잘 맞는 콘텐츠 방향을 하나 선택해 한국어 초안을 작성해줘.
+하나의 원본 주제를 모든 플랫폼 형식으로 변환해 한국어 초안을 작성해줘.
 
 필수 원칙:
-- 사용한 Obsidian 파일명과 사용한 트렌드만 정확히 표시한다.
+- 모든 형식은 선정된 topic과 angle을 공유한다. 서로 다른 소재를 만들지 않는다.
+- 사용한 Obsidian 파일명과 선정된 trend만 정확히 표시한다.
 - 근거에 없는 행사·가격·메뉴·후기·운영 정보는 넣지 않는다.
-- 트렌드가 매장과 무관하면 억지로 연결하지 않는다.
+- trend가 null이면 트렌드를 새로 끌어오거나 억지로 연결하지 않는다.
 - 문장마다 과장된 감탄사와 흔한 AI 표현을 피한다.
 - 직원이 사실 여부를 빠르게 확인할 수 있게 검수 포인트를 준다.
+- Threads는 THREADS_RULE의 반말·화자 규칙을 반드시 적용한다.
 
 출력 형식:
 ## 오늘의 콘텐츠 방향
-선택한 주제와 선택 이유 2~3문장
+확정된 원본 주제와 관점, 선정 이유 2~3문장
 
 ## 사용 근거
 - Obsidian: 파일명 또는 없음
@@ -423,7 +756,7 @@ def build_content_prompt(research):
 - 확인 필요: 직원 확인 항목
 
 ## Threads
-서로 다른 톤의 짧은 글 2안. 각 안에 자연스러운 행동 유도 한 줄 포함.
+공식 계정용 짧은 글 1안. THREADS_RULE에 따라 자연스러운 반말과 운영자 화자를 사용하고, 근거 없는 개인 경험을 만들지 않는다.
 
 ## Blog
 제목 3개, 도입, 소제목 3개가 있는 본문, 마무리. 검색어를 억지로 반복하지 않는다.
@@ -480,9 +813,11 @@ def run_marketing_job():
     log("Hermes", "research started")
     research = research_snapshot()
     log("Hermes", "research completed")
+    history = load_topic_history()
+    selection = select_daily_topic(research, history)
     log("LLM", "request started")
     content = openrouter_request(
-        build_content_prompt(research),
+        build_content_prompt(research, selection),
         max_tokens=int(os.environ.get("MARKETING_MAX_TOKENS", "3200")),
     )
     log("LLM", "success")
@@ -490,7 +825,19 @@ def run_marketing_job():
     log("Discord", "send started")
     send_marketing_channels(content, research, now)
     log("Discord", "success")
+    record_topic_history(
+        selection["topic"],
+        angle=selection["angle"],
+        status="draft_sent",
+        details={
+            "reason": selection["reason"],
+            "source_files": selection["source_files"],
+            "trend": selection["trend"],
+        },
+        now=now,
+    )
     log("Job", "completed")
+    return {"selection": selection, "content": content}
 
 
 def scheduler_loop():

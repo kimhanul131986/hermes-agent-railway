@@ -55,6 +55,13 @@ This template goes beyond a basic Hermes deploy:
 | `MARKETING_SCHEDULER_ENABLED` | Set `true` to run the daily marketing pipeline. Keep `false` until manual tests pass. |
 | `MARKETING_RUN_TIME` | Daily run time in `HH:MM`, interpreted using `TZ`. |
 | `MARKETING_SOURCE_TOPIC` | Fallback source topic for manual and scheduled tests. |
+| `MARKETING_TOPIC_HISTORY_PATH` | Persistent JSON history path (default: `/root/.hermes/marketing/topic_history.json`). |
+| `MARKETING_TOPIC_HISTORY_LIMIT` | Number of recent draft topics to retain (default: `30`). |
+| `MARKETING_TOPIC_DUPLICATE_THRESHOLD` | Similarity score used to reject repeated topics (default: `0.72`). |
+| `MARKETING_TOPIC_MAX_ATTEMPTS` | Maximum topic reselection attempts after duplicate rejection (default: `3`). |
+| `MARKETING_TOPIC_MAX_TOKENS` | OpenRouter output limit for the topic-selection JSON call (default: `1800`). |
+| `OBSIDIAN_PRIORITY_MAX_FILES` | Reserved slots for operating rules/store/brand/product sources (default: `8`). |
+| `TREND_RELEVANCE_KEYWORDS` | Optional comma-separated keywords used to filter Korean trends. |
 | `STORE_NAME` | Store name included in the generation prompt. |
 | `GDRIVE_SOURCE_SUBPATH` | Folder below `GDRIVE_ROOT_FOLDER_ID` to sync through Drive API (default: `02_wiki`; use `/` to sync Markdown from the root). |
 | `MARKETING_REQUIRE_OBSIDIAN` | Fail safely instead of generating an ungrounded draft when no Markdown sources are available (default: `true`). |

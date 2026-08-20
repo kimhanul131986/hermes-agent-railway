@@ -15,9 +15,16 @@ def main():
         "--local-path",
         help="Override GDRIVE_LOCAL_PATH for a local test without touching the Railway volume",
     )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        help="Override MARKETING_MAX_TOKENS for a lower-cost manual test",
+    )
     args = parser.parse_args()
     if args.local_path:
         os.environ["GDRIVE_LOCAL_PATH"] = os.path.abspath(args.local_path)
+    if args.max_tokens:
+        os.environ["MARKETING_MAX_TOKENS"] = str(args.max_tokens)
 
     marketing_pipeline.load_env_files()
     marketing_pipeline.log("Test", "Drive API sync started")
