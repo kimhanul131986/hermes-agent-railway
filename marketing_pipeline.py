@@ -17,10 +17,30 @@ DISCORD_API_URL = "https://discord.com/api/v10"
 USER_AGENT = "goobne-hermes-marketing-pipeline/1.0"
 DEFAULT_MODEL = "anthropic/claude-3.5-sonnet"
 DEFAULT_TOPIC = "홍대에서 외국인 친구와 치맥하기 좋은 이유"
+DEFAULT_ENV_FILES = ("/root/.hermes/.env", ".env")
 
 
 def log(stage, message):
     print(f"[{stage}] {message}", flush=True)
+
+
+def load_env_files():
+    for path in DEFAULT_ENV_FILES:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as env_file:
+                for raw_line in env_file:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and key not in os.environ:
+                        os.environ[key] = value
+        except OSError as exc:
+            log("ENV ERROR", f"Could not read {path}: {exc}")
 
 
 def require_env(name):
@@ -233,6 +253,7 @@ def scheduler_loop():
 
 
 def main():
+    load_env_files()
     parser = argparse.ArgumentParser(description="Goobne Hermes marketing pipeline")
     parser.add_argument("--once", action="store_true", help="Run the full marketing pipeline once")
     parser.add_argument("--test-llm", action="store_true", help="Send a tiny OpenRouter request")
