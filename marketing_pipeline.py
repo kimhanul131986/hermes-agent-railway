@@ -8,8 +8,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -18,6 +18,14 @@ USER_AGENT = "goobne-hermes-marketing-pipeline/1.0"
 DEFAULT_MODEL = "anthropic/claude-3.5-sonnet"
 DEFAULT_TOPIC = "홍대에서 외국인 친구와 치맥하기 좋은 이유"
 DEFAULT_ENV_FILES = ("/root/.hermes/.env", ".env")
+
+
+def configured_timezone():
+    name = os.environ.get("TZ", "Asia/Seoul")
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=9), "KST")
 
 
 def log(stage, message):
@@ -225,7 +233,7 @@ def run_marketing_job():
     log("LLM", "request started")
     content = openrouter_request(build_content_prompt(topic))
     log("LLM", "success")
-    now = datetime.now(ZoneInfo(os.environ.get("TZ", "Asia/Seoul")))
+    now = datetime.now(configured_timezone())
     message = f"## 굽네 마케팅 검수 초안\n- 생성시각: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n- Source: {topic}\n\n{content}"
     log("Discord", "send started")
     send_discord_message(message)
@@ -234,7 +242,7 @@ def run_marketing_job():
 
 
 def scheduler_loop():
-    timezone = ZoneInfo(os.environ.get("TZ", "Asia/Seoul"))
+    timezone = configured_timezone()
     run_time = os.environ.get("MARKETING_RUN_TIME", "09:00").strip()
     hour, minute = [int(part) for part in run_time.split(":", 1)]
     log("Scheduler", f"started; daily run at {run_time} {timezone.key}")
