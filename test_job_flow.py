@@ -27,6 +27,11 @@ class MarketingJobFlowTests(unittest.TestCase):
 
     @patch.object(marketing_pipeline, "record_topic_history")
     @patch.object(marketing_pipeline, "send_marketing_channels")
+    @patch.object(
+        marketing_pipeline,
+        "review_blog_content",
+        return_value=("generated content", {"approved": True, "issues": []}),
+    )
     @patch.object(marketing_pipeline, "openrouter_request", return_value="generated content")
     @patch.object(marketing_pipeline, "select_daily_topic")
     @patch.object(marketing_pipeline, "load_topic_history", return_value=[])
@@ -37,6 +42,7 @@ class MarketingJobFlowTests(unittest.TestCase):
         load_history,
         select_topic,
         openrouter,
+        review_blog,
         send_channels,
         record_history,
     ):
@@ -52,6 +58,11 @@ class MarketingJobFlowTests(unittest.TestCase):
 
     @patch.object(marketing_pipeline, "record_topic_history")
     @patch.object(marketing_pipeline, "send_marketing_channels", side_effect=RuntimeError("Discord failed"))
+    @patch.object(
+        marketing_pipeline,
+        "review_blog_content",
+        return_value=("generated content", {"approved": False, "issues": ["fixed"]}),
+    )
     @patch.object(marketing_pipeline, "openrouter_request", return_value="generated content")
     @patch.object(marketing_pipeline, "select_daily_topic")
     @patch.object(marketing_pipeline, "load_topic_history", return_value=[])
@@ -62,6 +73,7 @@ class MarketingJobFlowTests(unittest.TestCase):
         load_history,
         select_topic,
         openrouter,
+        review_blog,
         send_channels,
         record_history,
     ):

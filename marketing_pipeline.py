@@ -193,6 +193,23 @@ def clip_text(value, limit):
     return value[:limit].rstrip() + "…"
 
 
+UNVERIFIED_SOURCE_MARKERS = (
+    "확인 필요",
+    "대표님 확인",
+    "직원 확인",
+    "초안 —",
+    "초안 -",
+    "(초안",
+    "[초안",
+)
+
+
+def source_is_unverified(source):
+    """Treat explicitly provisional notes as ideas, never as factual evidence."""
+    text = str(source.get("excerpt", ""))
+    return any(marker in text for marker in UNVERIFIED_SOURCE_MARKERS)
+
+
 def obsidian_priority_rank(path, root):
     relative = path.relative_to(root)
     parts = {part.lower() for part in relative.parts[:-1]}
@@ -396,7 +413,9 @@ def parse_json_object(value):
 
 def build_topic_selection_prompt(research, history, rejected_topics=None):
     source_text = "\n\n".join(
-        f"[파일: {source['file']}]\n{source['excerpt']}"
+        f"[파일: {source['file']} | "
+        f"상태: {'미확인-소재만 사용' if source_is_unverified(source) else '확정 근거'}]\n"
+        f"{source['excerpt']}"
         for source in research["obsidian"]
     )
     history_text = "\n".join(
@@ -434,6 +453,7 @@ Obsidian 자료:
 선정 규칙:
 - 최근 주제 및 거절 후보와 소재나 관점이 겹치지 않아야 한다.
 - 최소 한 개의 Obsidian 파일을 실제 근거로 사용한다.
+- 상태가 '미확인-소재만 사용'인 파일은 사실 근거로 인용하거나 source_files에 넣지 않는다.
 - 관련 트렌드가 없거나 연결이 약하면 trend는 null로 둔다.
 - 매장 홍보 문구가 아니라 여러 플랫폼으로 확장 가능한 원본 주제를 고른다.
 - 확인되지 않은 수치, 후기, 운영 경험은 만들지 않는다.
@@ -478,6 +498,16 @@ def validate_selected_topic(selection, research):
             unknown_sources.append(str(name))
     if unknown_sources:
         raise RuntimeError(f"Selected topic cited unknown source file(s): {', '.join(unknown_sources)}")
+    source_map = {source["file"]: source for source in research["obsidian"]}
+    unverified_sources = [
+        filename for filename in resolved_sources
+        if source_is_unverified(source_map[filename])
+    ]
+    if unverified_sources:
+        raise RuntimeError(
+            "Selected topic cited unverified source file(s): "
+            + ", ".join(unverified_sources)
+        )
     if trend is not None and trend not in research["trends"]:
         raise RuntimeError(f"Selected topic cited an unavailable trend: {trend}")
     return {
@@ -713,17 +743,46 @@ def is_rule_source_name(filename):
     return "/00_운영규칙/" in f"/{normalized}" or normalized.endswith("_rule.md")
 
 
-def build_content_prompt(research, selected_topic):
-    store_name = os.environ.get("STORE_NAME", "굽네치킨 홍대 레드로드점")
+def rule_platform(filename):
+    basename = Path(str(filename).replace("\\", "/")).name.lower()
+    if basename == "blog_rule.md":
+        return "blog"
+    if basename == "threads_rule.md":
+        return "threads"
+    return "shared"
+
+
+def content_sources(research, selected_topic, platform=None, include_unverified_citations=True):
     cited_files = set(selected_topic["source_files"])
-    sources = [
+    allowed_rule_platforms = {"shared"}
+    if platform:
+        allowed_rule_platforms.add(str(platform).lower())
+    return [
         source for source in research["obsidian"]
-        if source["file"] in cited_files or is_rule_source_name(source["file"])
+        if (
+            source["file"] in cited_files
+            and (include_unverified_citations or not source_is_unverified(source))
+        )
+        or (
+            is_rule_source_name(source["file"])
+            and rule_platform(source["file"]) in allowed_rule_platforms
+        )
     ]
-    source_text = "\n\n".join(
-        f"[Obsidian: {source['file']} | updated {source.get('updated', 'unknown')}]\n{source['excerpt']}"
+
+
+def format_source_packet(sources):
+    return "\n\n".join(
+        f"[Obsidian: {source['file']} | updated {source.get('updated', 'unknown')} | "
+        f"status {'UNVERIFIED' if source_is_unverified(source) else 'CONFIRMED'}]\n"
+        f"{source['excerpt']}"
         for source in sources
     ) or "(동기화된 Obsidian 자료 없음)"
+
+
+def build_content_prompt(research, selected_topic):
+    store_name = os.environ.get("STORE_NAME", "굽네치킨 홍대 레드로드점")
+    sources = content_sources(research, selected_topic, platform="threads")
+    source_text = format_source_packet(sources)
     selection_text = json.dumps(selected_topic, ensure_ascii=False, indent=2)
     return [
         {
@@ -759,6 +818,7 @@ def build_content_prompt(research, selected_topic):
 - 문장마다 과장된 감탄사와 흔한 AI 표현을 피한다.
 - 직원이 사실 여부를 빠르게 확인할 수 있게 검수 포인트를 준다.
 - Threads는 THREADS_RULE의 반말·화자 규칙을 반드시 적용한다.
+- BLOG_RULE은 이 공통 생성에 포함되지 않는다. Blog 초안은 후속 전용 검수 단계에서 규칙과 근거를 적용한다.
 
 출력 형식:
 ## 오늘의 콘텐츠 방향
@@ -789,6 +849,105 @@ def build_content_prompt(research, selected_topic):
 """.strip(),
         },
     ]
+
+
+def replace_markdown_section(content, heading, replacement):
+    heading_pattern = re.compile(r"^(#{2,6})\s+(.+?)\s*$", re.MULTILINE)
+    matches = list(heading_pattern.finditer(content))
+    target_text = str(heading).strip().lower()
+    for index, match in enumerate(matches):
+        if target_text not in match.group(2).strip().lower():
+            continue
+        target_level = len(match.group(1))
+        end = len(content)
+        for following in matches[index + 1:]:
+            if len(following.group(1)) <= target_level:
+                end = following.start()
+                break
+        clean_replacement = str(replacement).strip()
+        if re.match(r"^#{2,6}\s+blog\s*$", clean_replacement, re.IGNORECASE):
+            clean_replacement = extract_markdown_section(clean_replacement, "Blog")
+        return content[:match.end()] + "\n" + clean_replacement + "\n\n" + content[end:].lstrip()
+    raise RuntimeError(f"Generated content is missing required section: {heading}")
+
+
+def build_blog_review_prompt(blog_draft, research, selected_topic):
+    store_name = os.environ.get("STORE_NAME", "굽네치킨 홍대 레드로드점")
+    sources = content_sources(
+        research,
+        selected_topic,
+        platform="blog",
+        include_unverified_citations=False,
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "너는 로컬 매장 블로그의 사실 검증 편집자다. BLOG_RULE을 적용하되, "
+                "CONFIRMED 자료에 직접 적힌 사실만 단정할 수 있다. 상식, 추측, 광고 관행으로 "
+                "좌석·공간·간판·접근성·직원·서비스·메뉴·가격·운영시간을 보충하지 않는다. "
+                "UNVERIFIED 자료는 소재 아이디어로만 보고 어떤 사실도 가져오지 않는다."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"""
+매장: {store_name}
+
+선정 결과:
+{json.dumps(selected_topic, ensure_ascii=False, indent=2)}
+
+허용 근거와 BLOG_RULE:
+{format_source_packet(sources)}
+
+검수할 Blog 초안:
+{blog_draft}
+
+작업:
+1. 초안의 사실 주장을 문장별로 허용 근거와 대조한다.
+2. 직접 근거가 없는 문장은 삭제하거나, 사실 주장이 없는 일반적인 안내 문장으로 바꾼다.
+3. 성산2동점과 홍대 레드로드점의 경력·정보를 서로 옮겨 쓰지 않는다.
+4. BLOG_RULE의 CONNECT → CONVINCE → CONVERT, 존댓말, 검색형 제목/소제목 구조를 적용한다.
+5. 결과에 출처 표기나 내부 검수 메모를 섞지 않는다.
+
+JSON만 출력:
+{{
+  "approved": false,
+  "issues": ["수정하거나 삭제한 사실성 문제"],
+  "blog": "### 제목 제안부터 시작하는 수정 완료 블로그 본문"
+}}
+문제가 전혀 없을 때만 approved를 true로 한다.
+""".strip(),
+        },
+    ]
+
+
+def review_blog_content(content, research, selected_topic):
+    blog_draft = extract_markdown_section(content, "Blog")
+    if not blog_draft:
+        raise RuntimeError("Generated content is missing required section: Blog")
+    log("Blog Review", "request started")
+    response = openrouter_request(
+        build_blog_review_prompt(blog_draft, research, selected_topic),
+        max_tokens=int(os.environ.get("MARKETING_BLOG_REVIEW_MAX_TOKENS", "1600")),
+        model=(
+            os.environ.get("OPENROUTER_BLOG_REVIEW_MODEL", "").strip()
+            or os.environ.get("OPENROUTER_CONTENT_MODEL", "").strip()
+            or None
+        ),
+    )
+    review = parse_json_object(response)
+    revised_blog = str(review.get("blog", "")).strip()
+    issues = review.get("issues", [])
+    if not revised_blog:
+        raise RuntimeError("Blog review returned an empty revised draft")
+    if not isinstance(issues, list):
+        raise RuntimeError("Blog review issues must be a JSON array")
+    log(
+        "Blog Review",
+        f"completed; approved={bool(review.get('approved'))}, corrected_issues={len(issues)}",
+    )
+    return replace_markdown_section(content, "Blog", revised_blog), review
 
 def run_llm_test():
     log("LLM", "request started")
@@ -836,6 +995,7 @@ def run_marketing_job():
         model=os.environ.get("OPENROUTER_CONTENT_MODEL", "").strip() or None,
     )
     log("LLM", "success")
+    content, blog_review = review_blog_content(content, research, selection)
     now = datetime.now(configured_timezone())
     log("Discord", "send started")
     send_marketing_channels(content, research, now)
@@ -848,6 +1008,8 @@ def run_marketing_job():
             "reason": selection["reason"],
             "source_files": selection["source_files"],
             "trend": selection["trend"],
+            "blog_review_approved": bool(blog_review.get("approved")),
+            "blog_review_issue_count": len(blog_review.get("issues", [])),
         },
         now=now,
     )
